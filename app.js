@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require("express");
 const socketIo = require("socket.io");
 const http = require("http");
@@ -70,6 +71,7 @@ io.on("connection", function (socket) {
     io.emit("boardState", chess.fen());
 });
 
-server.listen(3000, function () {
-    console.log("listening on port 3000");
+const port = process.env.PORT || 3000;
+server.listen(port, function () {
+    console.log(`listening on port ${port}`);
 });
