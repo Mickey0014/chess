@@ -54,6 +54,9 @@ io.on("connection", function (socket) {
             if (result) {
                 io.emit("move", move);
                 io.emit("boardState", chess.fen());
+                if (chess.in_checkmate()) {
+                    io.emit("gameOver", "Checkmate!");
+                }
             } else {
                 console.log("Invalid move:", move);
                 socket.emit("invalidMove", move);

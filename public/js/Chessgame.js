@@ -112,6 +112,8 @@ socket.on("move", (move) => {
     renderBoard();
 });
 
-socket.emit("joinGame"); // Join the game on connection
+socket.on("gameOver", (message) => {
+    alert(message); // Simple alert for game over message
+});
 
 renderBoard();
