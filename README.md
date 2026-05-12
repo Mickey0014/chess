@@ -16,5 +16,7 @@ Open `http://localhost:3000` in two browser windows. The first player gets White
 - Server-validated legal moves
 - White, Black, and spectator roles
 - Responsive board UI
+- Mobile-friendly tap-to-move controls
+- Pawn promotion picker for queen, rook, bishop, or knight
 - Check, checkmate, stalemate, and draw status
 - New game and board flip controls
