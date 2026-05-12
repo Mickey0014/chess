@@ -10,7 +10,10 @@ const server = http.createServer(app);
 const io = socketIo(server);
 
 const chess = new Chess();
-let players = {};
+const players = {
+    white: null,
+    black: null,
+};
 
 app.set("view engine", "ejs");
 app.use(express.static(path.join(__dirname, "public")));
@@ -19,56 +22,172 @@ app.get("/", (req, res) => {
     res.render("index", { title: "Chess Game" });
 });
 
+function getRole(socketId) {
+    if (players.white === socketId) return "w";
+    if (players.black === socketId) return "b";
+    return null;
+}
+
+function getPlayerCounts() {
+    return {
+        white: Boolean(players.white),
+        black: Boolean(players.black),
+    };
+}
+
+function buildStatus() {
+    const turn = chess.turn() === "w" ? "White" : "Black";
+
+    if (chess.isCheckmate()) {
+        return {
+            gameOver: true,
+            message: `Checkmate. ${turn === "White" ? "Black" : "White"} wins.`,
+        };
+    }
+
+    if (chess.isStalemate()) {
+        return { gameOver: true, message: "Draw by stalemate." };
+    }
+
+    if (chess.isThreefoldRepetition()) {
+        return { gameOver: true, message: "Draw by threefold repetition." };
+    }
+
+    if (chess.isInsufficientMaterial()) {
+        return { gameOver: true, message: "Draw by insufficient material." };
+    }
+
+    if (chess.isDraw()) {
+        return { gameOver: true, message: "Draw." };
+    }
+
+    return {
+        gameOver: false,
+        message: chess.isCheck() ? `${turn} to move. Check.` : `${turn} to move.`,
+    };
+}
+
+function buildGameState(extra = {}) {
+    return {
+        fen: chess.fen(),
+        turn: chess.turn(),
+        players: getPlayerCounts(),
+        status: buildStatus(),
+        ...extra,
+    };
+}
+
+function sendRole(socket) {
+    if (!players.white) {
+        players.white = socket.id;
+        socket.emit("role", "w");
+        return;
+    }
+
+    if (!players.black) {
+        players.black = socket.id;
+        socket.emit("role", "b");
+        return;
+    }
+
+    socket.emit("role", null);
+}
+
+function claimRole(socket, requestedRole) {
+    const currentRole = getRole(socket.id);
+
+    if (!["w", "b"].includes(requestedRole)) {
+        clearRole(socket.id);
+        socket.emit("role", null);
+        return true;
+    }
+
+    const seat = requestedRole === "w" ? "white" : "black";
+
+    if (players[seat] && players[seat] !== socket.id) {
+        socket.emit("moveRejected", `${seat[0].toUpperCase() + seat.slice(1)} is already taken.`);
+        return false;
+    }
+
+    if (currentRole && currentRole !== requestedRole) {
+        clearRole(socket.id);
+    }
+
+    players[seat] = socket.id;
+    socket.emit("role", requestedRole);
+    return true;
+}
+
+function clearRole(socketId) {
+    if (players.white === socketId) {
+        players.white = null;
+    }
+
+    if (players.black === socketId) {
+        players.black = null;
+    }
+}
+
 io.on("connection", function (socket) {
     console.log("connected", socket.id);
 
-    if (!players.white) {
-        players.white = socket.id;
-        socket.emit("playerRole", "w");
-    } else if (!players.black) {
-        players.black = socket.id;
-        socket.emit("playerRole", "b");
-    } else {
-        socket.emit("spectatorRole");
-    }
+    sendRole(socket);
+    socket.emit("gameState", buildGameState());
+    socket.broadcast.emit("gameState", buildGameState());
 
     socket.on("disconnect", function () {
-        if (socket.id === players.white) {
-            delete players.white;
-        } else if (socket.id === players.black) {
-            delete players.black;
-        }
+        clearRole(socket.id);
+        io.emit("gameState", buildGameState());
+    });
 
-        if (Object.keys(players).length === 0) {
-            chess.reset();
-            io.emit("boardState", chess.fen());
+    socket.on("claimRole", (role) => {
+        if (claimRole(socket, role)) {
+            io.emit("gameState", buildGameState());
         }
     });
 
     socket.on("move", (move) => {
         try {
-            if (chess.turn() === "w" && socket.id !== players.white) return;
-            if (chess.turn() === "b" && socket.id !== players.black) return;
+            const role = getRole(socket.id);
 
-            const result = chess.move(move);
+            if (!role) {
+                socket.emit("moveRejected", "Spectators cannot move pieces.");
+                return;
+            }
+
+            if (chess.turn() !== role) {
+                socket.emit("moveRejected", "It is not your turn.");
+                return;
+            }
+
+            const result = chess.move({
+                from: move.from,
+                to: move.to,
+                promotion: move.promotion || "q",
+            });
 
             if (result) {
-                io.emit("move", move);
-                io.emit("boardState", chess.fen());
-                if (chess.in_checkmate()) {
-                    io.emit("gameOver", "Checkmate!");
-                }
+                io.emit("gameState", buildGameState({ lastMove: { from: result.from, to: result.to } }));
             } else {
-                console.log("Invalid move:", move);
-                socket.emit("invalidMove", move);
+                socket.emit("moveRejected", "That move is not legal.");
             }
         } catch (err) {
-            console.log(err);
-            socket.emit("invalidMove", move);
+            console.log("Invalid move:", move, err.message);
+            socket.emit("moveRejected", "That move is not legal.");
         }
     });
 
-    io.emit("boardState", chess.fen());
+    socket.on("resetGame", () => {
+        const role = getRole(socket.id);
+
+        if (!role) {
+            socket.emit("moveRejected", "Only a player can reset the game.");
+            return;
+        }
+
+        chess.reset();
+        io.emit("gameState", buildGameState({ lastMove: null }));
+    });
 });
 
 const port = process.env.PORT || 3000;
